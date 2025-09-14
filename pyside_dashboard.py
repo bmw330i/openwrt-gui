@@ -307,6 +307,9 @@ class MainWindow(QtWidgets.QWidget):
         self.resize(900, 500)
         main_layout = QtWidgets.QVBoxLayout(self)
         top_layout = QtWidgets.QHBoxLayout()
+        # wrap gauges in a widget so we can hide/show the whole area
+        self.gauges_widget = QtWidgets.QWidget(self)
+        self.gauges_widget.setLayout(top_layout)
 
         # Gauges using custom GaugeWidget (dial) for WAN, LAN, WiFi
         self.dials = {}
@@ -329,12 +332,13 @@ class MainWindow(QtWidgets.QWidget):
             self.labels[key] = lbl
             self.value_labels[key] = val_lbl
 
-        main_layout.addLayout(top_layout)
+        main_layout.addWidget(self.gauges_widget)
 
         # Status buttons -> round indicator lights
         status_layout = QtWidgets.QHBoxLayout()
+        self.status_widget = QtWidgets.QWidget(self)
+        self.status_widget.setLayout(status_layout)
         self.status_indicators = {}
-        self.status_values = {}
         for name in ['wan', 'lan', 'wifi']:
             v = QtWidgets.QVBoxLayout()
             color_lbl = QtWidgets.QLabel()
@@ -342,24 +346,28 @@ class MainWindow(QtWidgets.QWidget):
             color_lbl.setStyleSheet('background-color: grey; border-radius: 12px;')
             name_lbl = QtWidgets.QLabel(name.upper())
             name_lbl.setAlignment(QtCore.Qt.AlignCenter)
-            value_lbl = QtWidgets.QLabel(bits_to_display(0))
-            value_lbl.setAlignment(QtCore.Qt.AlignCenter)
             v.addWidget(color_lbl, alignment=QtCore.Qt.AlignCenter)
             v.addWidget(name_lbl)
-            v.addWidget(value_lbl)
             status_layout.addLayout(v)
             self.status_indicators[name] = color_lbl
-            self.status_values[name] = value_lbl
-        main_layout.addLayout(status_layout)
+        main_layout.addWidget(self.status_widget)
 
         # Control buttons
         ctrl_layout = QtWidgets.QHBoxLayout()
         tail_btn = QtWidgets.QPushButton('Tail Logs')
         tail_btn.clicked.connect(self.open_tail)
         ctrl_layout.addWidget(tail_btn)
+        dns_btn = QtWidgets.QPushButton('DNS')
+        dns_btn.clicked.connect(self.show_dns_view)
+        ctrl_layout.addWidget(dns_btn)
         exit_btn = QtWidgets.QPushButton('Exit')
         exit_btn.clicked.connect(self.close)
         ctrl_layout.addWidget(exit_btn)
+        # Back button for DNS view (hidden initially)
+        self.back_btn = QtWidgets.QPushButton('Back')
+        self.back_btn.clicked.connect(self.show_main_view)
+        self.back_btn.hide()
+        ctrl_layout.addWidget(self.back_btn)
         main_layout.addLayout(ctrl_layout)
 
         # SSH client attempt
@@ -375,13 +383,17 @@ class MainWindow(QtWidgets.QWidget):
         self.monitor.rates_signal.connect(self.on_rates)
         self.monitor.start()
 
-        # DHCP leases table
+        # DNS / leases area (hidden by default, shown when DNS button pressed)
+        self.dns_widget = QtWidgets.QWidget(self)
+        dns_layout = QtWidgets.QVBoxLayout(self.dns_widget)
         self.leases_table = QtWidgets.QTableWidget(0, 5)
         self.leases_table.setHorizontalHeaderLabels(['IP', 'MAC', 'Hostname', 'Expires', 'Status'])
         self.leases_table.horizontalHeader().setStretchLastSection(True)
-        main_layout.addWidget(self.leases_table)
+        dns_layout.addWidget(self.leases_table)
+        self.dns_widget.hide()
+        main_layout.addWidget(self.dns_widget)
 
-        # Start leases thread
+        # Start leases thread (populates the leases table)
         self.leases_thread = LeasesThread(self.ssh)
         self.leases_thread.leases_signal.connect(self.update_leases_table)
         self.leases_thread.start()
@@ -414,9 +426,6 @@ class MainWindow(QtWidgets.QWidget):
                 if dot:
                     dot_color = 'green' if val > 0 else 'red'
                     dot.setStyleSheet(f'background-color: {dot_color}; border-radius: 12px;')
-                sval = self.status_values.get(name)
-                if sval:
-                    sval.setText(disp)
 
     def update_leases_table(self, leases):
         # leases: list of dicts with keys ip, mac, name, expires, status
@@ -450,6 +459,25 @@ class MainWindow(QtWidgets.QWidget):
         self.monitor.stop()
         self.leases_thread.stop()
         event.accept()
+
+    def show_dns_view(self):
+        # hide gauges and status, show leases table prominently
+        try:
+            self.gauges_widget.hide()
+            self.status_widget.hide()
+            self.dns_widget.show()
+            self.back_btn.show()
+        except Exception:
+            pass
+
+    def show_main_view(self):
+        try:
+            self.gauges_widget.show()
+            self.status_widget.show()
+            self.dns_widget.hide()
+            self.back_btn.hide()
+        except Exception:
+            pass
 
 # New LeasesThread implementation
 class LeasesThread(QtCore.QThread):
@@ -562,6 +590,10 @@ class LeasesThread(QtCore.QThread):
                 leases = []
             self.leases_signal.emit(leases)
             time.sleep(10)
+
+    def stop(self):
+        self.running = False
+        self.wait(2000)
 
 def main():
     app = QtWidgets.QApplication(sys.argv)
